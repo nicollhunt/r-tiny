@@ -9,6 +9,7 @@ sys.path.append(root_path)
 import engine_main
 import engine
 import engine_save
+import engine_audio
 
 from event_bus import bus
 from starfield import StarPrefab, Starfield
@@ -19,12 +20,17 @@ from rumble_controller import RumbleController
 
 from engine_draw import Color
 import engine_io as io
-from engine_resources import TextureResource as txtr
+from engine_resources import TextureResource as txtr, WaveSoundResource as snd
 from engine_math import Vector2, Vector3
 from engine_nodes import CameraNode, Sprite2DNode, Text2DNode, Rectangle2DNode
 
 import json
 import random
+
+# Load sound resources
+engine_audio.set_volume(1)
+explosion_sound = snd(f"{root_path}/explosion.wav")
+laser_sound = snd(f"{root_path}/laserShoot.wav")
 
 engine_save.set_location("save.data")
 
@@ -32,13 +38,21 @@ shipTxtr = txtr(f"{root_path}/ship.bmp")
 
 def load_json_data(filename: str) -> dict:
     try:
-        with open(f"{root_path}/ship.bmp.json", 'r') as f:
+        with open(filename, 'r') as f:
             return json.load(f)
     except Exception as e:
         print(f"Error: {e}")
         return None
-        
+
 shipData = load_json_data(f"{root_path}/ship.bmp.json")
+
+# Load module (Force pod) texture and data
+moduleTxtr = txtr(f"{root_path}/module.bmp")
+moduleData = load_json_data(f"{root_path}/module.bmp.json")
+
+from actor import Module
+
+module = Module(moduleTxtr, moduleData, position=Vector2(42, 28), speed=2)
 
 enemyTxtr = txtr(f"{root_path}/enemy.bmp")
 
@@ -51,7 +65,9 @@ explodeTxtr = txtr(f"{root_path}/explode.bmp")
 #
 # Main Player Ship
 #
-player = Player(shipTxtr, shipData, position = Vector2(26, 28), speed = 2)
+from actor import Player
+
+player = Player(shipTxtr, shipData, position=Vector2(26, 28), speed=2, module=module)
 
 bullet_manager = BulletManager(bullet_texture, bullet_data)
 
@@ -95,6 +111,9 @@ def spawnExplode(position):
     node.frame_current_x = 0
     node.position.x = position.x
     node.position.y = position.y
+    
+    # Play explosion sound
+    engine_audio.play(explosion_sound, 0, False)
     
     explode["timer"] = 22
     return
@@ -169,20 +188,28 @@ def spawnRandomEnemy():
         spawnEnemy(Vector2(screen_width + 26, random.randint(5, screen_height -5)))
 
 
-def checkCollision(node1, node2):
+def checkCollision(node1, node2, reduce_size = False):
     
+    node2_width = node2.texture.width / (node2.frame_count_x * 2)
+    if reduce_size:
+        node2_width = node2_width / 2
+
     xMin1 = node1.position.x - node1.texture.width / (node1.frame_count_x * 2)
-    xMin2 = node2.position.x - node2.texture.width / (node2.frame_count_x * 2)
+    xMin2 = node2.position.x - node2_width
     xMax1 = node1.position.x + node1.texture.width / (node1.frame_count_x * 2)
-    xMax2 = node2.position.x + node2.texture.width / (node2.frame_count_x * 2)
+    xMax2 = node2.position.x + node2_width
     
     if xMax1 < xMin2 or xMin1 > xMax2:
         return False
 
+    node2_height = node2.texture.height / (node2.frame_count_y * 2)
+    if reduce_size:
+        node2_height = node2_height / 2
+
     yMin1 = node1.position.y - node1.texture.height / (node1.frame_count_y * 2)
-    yMin2 = node2.position.y - node2.texture.height / (node2.frame_count_y * 2)
+    yMin2 = node2.position.y - node2_height
     yMax1 = node1.position.y + node1.texture.height / (node1.frame_count_y * 2)
-    yMax2 = node2.position.y + node2.texture.height / (node2.frame_count_y * 2)
+    yMax2 = node2.position.y + node2_height
 
     if yMax1 < yMin2 or yMin1 > yMax2:
         return False
@@ -197,6 +224,7 @@ def checkEnemyCollision(bulletNode):
         if checkCollision(enemyNode, bulletNode):
             spawnExplode(enemyNode.position)
             enemiesToDespawn.append(enemy)
+            break
             
     for enemy in enemiesToDespawn:
         bus.dispatch("enemy_destroyed", enemy)
@@ -212,6 +240,10 @@ def resetGame():
     # Reset player position
     player.node.position = Vector2(26, 28)  # Initial position from player creation
     player.node.opacity = 1  # Make sure player is visible again
+
+    player.module.node.position.x = player.node.position.x + player.module.offset.x
+    player.module.node.position.y = player.node.position.y + player.module.offset.y
+    player.module.attached = True
     
     # Reset enemy scaling
     global enemy_scale_timer, current_max_enemies
@@ -235,6 +267,9 @@ def resetGame():
 
 # Subscribe to player explosion finished event
 bus.subscribe("player_explosion_finished", lambda _: resetGame())
+
+# Subscribe to laser sound event
+bus.subscribe("play_laser", lambda _: engine_audio.play(laser_sound, 0, False))
 
 spawnRandomEnemy()
 
@@ -289,15 +324,24 @@ while True:
             spawnExplode(player.node.position)
             player.start_explosion()
             continue
+
+        # Check for collision with module
+        if hasattr(player, "module") and player.module:
+            if checkCollision(node, player.module.node, True):
+                spawnExplode(node.position)
+                bus.dispatch("enemy_destroyed", enemy)
+                despawnEnemy(enemy)
+                spawnRandomEnemy()
+                continue
         
         if (node.position.x <= 0):
             despawnEnemy(enemy)
             spawnRandomEnemy()
     
-        enemyFrame = (int)(frame / 2) % 5
-        if (enemyFrame > 2):
-            enemyFrame = 4 - enemyFrame
-        node.frame_current_x = enemyFrame
+        enemy["frame"] = (int)(frame / 2) % 5
+        if (enemy["frame"] > 2):
+            enemy["frame"] = 4 - enemy["frame"]
+        node.frame_current_x = enemy["frame"]
 
     bullet_manager.tick()
 
@@ -315,4 +359,3 @@ while True:
     
     # Rumble keps cutting out - disabling for now
     #rumble_controller.tick()
-    
