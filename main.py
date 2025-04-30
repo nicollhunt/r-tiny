@@ -1,4 +1,5 @@
 import sys
+import math
 
 root_path = '/Games/R-Tiny'
 
@@ -7,6 +8,7 @@ sys.path.append(root_path)
 
 import engine_main
 import engine
+import engine_save
 
 from event_bus import bus
 from starfield import StarPrefab, Starfield
@@ -23,6 +25,8 @@ from engine_nodes import CameraNode, Sprite2DNode, Text2DNode, Rectangle2DNode
 
 import json
 import random
+
+engine_save.set_location("save.data")
 
 shipTxtr = txtr(f"{root_path}/ship.bmp")
 
@@ -55,6 +59,13 @@ screen_width = 128
 screen_height = 128
 
 enemySpeed = 1.25
+
+# Enemy scaling configuration
+MIN_ENEMIES = 1
+MAX_ENEMIES = 5
+ENEMY_SCALE_TIME = 20  # Time in seconds to reach max enemies
+enemy_scale_timer = 0
+current_max_enemies = MIN_ENEMIES
 
 explodePool = []
 activeExplodes = []
@@ -136,6 +147,7 @@ def spawnEnemy(position):
     node.opacity = 1
     node.position.x = position.x
     node.position.y = position.y
+    item["time"] = 0  # Add time counter for sine wave
     return
 
 def despawnEnemy(item):
@@ -152,7 +164,9 @@ engine.fps_limit(30)
 paused = False
 
 def spawnRandomEnemy():
-    spawnEnemy(Vector2(screen_width + 26, random.randint(5, screen_height -5)))
+    # Only spawn if we haven't reached the current max
+    if len(activeEnemies) < current_max_enemies:
+        spawnEnemy(Vector2(screen_width + 26, random.randint(5, screen_height -5)))
 
 
 def checkCollision(node1, node2):
@@ -190,7 +204,37 @@ def checkEnemyCollision(bulletNode):
         spawnRandomEnemy()
         
     return len(enemiesToDespawn) > 0
-        
+
+def resetGame():
+    # Reset score
+    hud.reset()
+    
+    # Reset player position
+    player.node.position = Vector2(26, 28)  # Initial position from player creation
+    player.node.opacity = 1  # Make sure player is visible again
+    
+    # Reset enemy scaling
+    global enemy_scale_timer, current_max_enemies
+    enemy_scale_timer = 0
+    current_max_enemies = MIN_ENEMIES
+    
+    # Clear all active enemies
+    for enemy in activeEnemies[:]:  # Create a copy of the list to safely remove items
+        despawnEnemy(enemy)
+    
+    # Clear all active bullets
+    for bullet in bullet_manager.get_active_bullets():
+        bullet_manager.destroy_bullet(bullet)
+    
+    # Clear all active explosions
+    for explode in activeExplodes[:]:
+        despawnExplode(explode)
+    
+    # Spawn initial enemy
+    spawnRandomEnemy()
+
+# Subscribe to player explosion finished event
+bus.subscribe("player_explosion_finished", lambda _: resetGame())
 
 spawnRandomEnemy()
 
@@ -212,15 +256,39 @@ while True:
 
     frame = frame + 1
     
+    # Update enemy scaling
+    if enemy_scale_timer < ENEMY_SCALE_TIME:
+        enemy_scale_timer += 1/30  # Increment by frame time (assuming 30fps)
+        # Calculate current max enemies based on time elapsed
+        progress = enemy_scale_timer / ENEMY_SCALE_TIME
+        current_max_enemies = MIN_ENEMIES + int((MAX_ENEMIES - MIN_ENEMIES) * progress)
+    
     for explode in activeExplodes:
         explode["timer"] = explode["timer"] - 1
         if explode["timer"] == 0:
             despawnExplode(explode)
 
+    while len(activeEnemies) < current_max_enemies:
+        spawnRandomEnemy()
+
     for enemy in activeEnemies:
         node = enemy["node"]
         
+        # Update time counter
+        enemy["time"] += 0.1
+        
+        # Calculate sine wave offset
+        sine_offset = math.sin(enemy["time"]) * 1
+        
+        # Update position with sine wave movement
         node.position.x -= enemySpeed
+        node.position.y += sine_offset
+        
+        # Check for collision with player
+        if checkCollision(node, player.node) and not player.is_exploding:
+            spawnExplode(player.node.position)
+            player.start_explosion()
+            continue
         
         if (node.position.x <= 0):
             despawnEnemy(enemy)
