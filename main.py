@@ -224,12 +224,17 @@ def checkEnemyCollision(bulletNode):
         if checkCollision(enemyNode, bulletNode):
             spawnExplode(enemyNode.position)
             enemiesToDespawn.append(enemy)
-            break
             
     for enemy in enemiesToDespawn:
         bus.dispatch("enemy_destroyed", enemy)
         despawnEnemy(enemy)
         spawnRandomEnemy()
+        
+    # Check for module collision if it exists and is detached
+    if hasattr(player, "module") and player.module and not player.module.attached:
+        if checkCollision(player.module.node, bulletNode, True):
+            # Module absorbs the bullet
+            return True
         
     return len(enemiesToDespawn) > 0
 
@@ -333,6 +338,10 @@ while True:
                 despawnEnemy(enemy)
                 spawnRandomEnemy()
                 continue
+
+            # Check for collision with player ship when module is detached
+            if not player.module.attached and checkCollision(player.module.node, player.node, True):
+                player.module.attach()  # Automatically attach the module when it collides with the player
         
         if (node.position.x <= 0):
             despawnEnemy(enemy)
