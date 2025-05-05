@@ -60,6 +60,11 @@ bullet_filename = f"{root_path}/projectile.bmp"
 bullet_texture = txtr(bullet_filename)
 bullet_data = load_json_data(f"{bullet_filename}.json")
 
+# Load charge shot texture and data
+charge_shot_filename = f"{root_path}/chargeShot.bmp"
+charge_shot_texture = txtr(charge_shot_filename)
+charge_shot_data = load_json_data(f"{charge_shot_filename}.json")
+
 explodeTxtr = txtr(f"{root_path}/explode.bmp")
 
 #
@@ -67,7 +72,7 @@ explodeTxtr = txtr(f"{root_path}/explode.bmp")
 #
 from actor import Player
 
-player = Player(shipTxtr, shipData, position=Vector2(26, 28), speed=2, module=module)
+player = Player(shipTxtr, shipData, charge_shot_texture, charge_shot_data, position=Vector2(26, 28), speed=2, module=module)
 
 bullet_manager = BulletManager(bullet_texture, bullet_data)
 
@@ -358,7 +363,9 @@ while True:
         bulletNode = bullet.node
         
         if checkEnemyCollision(bulletNode):
-            bullet_manager.destroy_bullet(bullet)
+            bullet.charge_level -= 0.5
+            if bullet.charge_level <= 0:
+                bullet_manager.destroy_bullet(bullet)
             bus.dispatch("play_rumble", 0.15, 0.05)
 
     starfield.tick()

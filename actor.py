@@ -10,14 +10,18 @@ import engine_io as io
 import json
 
 class Actor:
-    def __init__(self, texture: TextureResource, data: dict, position: Vector2 = Vector2(), speed: int = 1, on_destroy_event: str = None):
+    def __init__(self, texture: TextureResource, data: dict, position: Vector2 = None, speed: int = 1, on_destroy_event: str = None):
+
+        if position is None:
+            position = Vector2(0, 0)
+
         self._on_destroy_event = on_destroy_event
         self.speed = speed
         self.input = Vector2()
         self.frame = 0
         
         self.node = Sprite2DNode(
-            position = Vector2(position.x, position.y),
+            position = position,
             texture = texture,
             transparent_color = get_colour_from_data(data, "transparent_color", Color(0, 0, 0)),
             frame_count_x = data.get("frame_count_x", 1),
@@ -106,12 +110,22 @@ class Module(Actor):
             self.velocity.y = self.velocity.y * drag
 
 class Player(Actor):
-    def __init__(self, texture: TextureResource, data: dict, position: Vector2 = Vector2(), speed: int = 1, on_destroy_event: str = None, module=None):
+    def __init__(self, texture: TextureResource, data: dict, charge_shot_texture: TextureResource, charge_shot_data: dict, position: Vector2 = Vector2(), speed: int = 1, on_destroy_event: str = None, module=None):
         super().__init__(texture, data, position, speed, on_destroy_event)
         self.is_exploding = False
         self.explosion_timer = 0
         self.explosion_duration = 22  # Same as enemy explosion duration
         self.module = module  # Reference to the module
+        
+        # Store charge shot properties
+        self.charge_shot_texture = charge_shot_texture
+        self.charge_shot_data = charge_shot_data
+        
+        # Charge shot properties
+        self.charge_time = 0
+        self.max_charge_time = 60  # 2 seconds at 30fps
+        self.is_charging = False
+        self.charge_node = None
 
     def tick(self):
         if self.is_exploding:
@@ -145,27 +159,74 @@ class Player(Actor):
         self.node.position.x = max(half_width, min(screen_width - half_width, self.node.position.x))
         self.node.position.y = max(half_height, min(screen_height - half_height, self.node.position.y))
 
-        # Fire bullet
-        if io.A.is_just_pressed and not self.is_exploding:
-            bullet_position = Vector2(self.node.position.x, self.node.position.y)
+        # Handle charging and shooting
+        if io.A.is_pressed and not self.is_exploding:
+            if not self.is_charging:
+                self.is_charging = True
+                self.charge_time = 0
+                # Create charge node if it doesn't exist
+                if self.charge_node is None:
+                    self.charge_node = Sprite2DNode(
+                        position=Vector2(self.node.position.x, self.node.position.y),
+                        texture=self.charge_shot_texture,
+                        transparent_color=Color(255, 0, 255),
+                        frame_count_x=self.charge_shot_data.get("frame_count_x", 1),
+                        frame_count_y=self.charge_shot_data.get("frame_count_y", 1),
+                        fps = 10.0,
+                        playing=True,
+                        layer=5
+                    )
+            
+            self.charge_time = min(self.charge_time + 1, self.max_charge_time)
+            
+            # Update charge animation and dispatch charge level
+            if self.charge_node:
+                charge_level = self.charge_time / self.max_charge_time
+                bus.dispatch("charge_level_changed", charge_level)
+                
+                # Position the charge sprite in front of the player or module
+                charge_position = Vector2(self.node.position.x, self.node.position.y)
+                if self.module and self.module.attached:
+                    charge_position.x += self.module.offset.x
+                
+                charge_position.x += 14  # Offset to be in front
+                charge_position.y += 2   # Center vertically
+                
+                self.charge_node.position = charge_position
+                self.charge_node.opacity = 1
 
+        elif self.is_charging:
+            self.is_charging = False
+            # Reset charge bar when releasing
+            bus.dispatch("charge_level_changed", 0)
+            
+            # Fire based on charge level
+            bullet_position = Vector2(self.node.position.x, self.node.position.y)
+            
             if self.module and self.module.attached:
                 bullet_position.x += self.module.offset.x
 
             bullet_position.x += 14
             bullet_position.y += 2
-            bus.dispatch("spawn_bullet", bullet_position)
-            bus.dispatch("play_rumble", 0.1, 0.05)
+            
+            # Calculate charge level (0-1)
+            charge_level = self.charge_time / self.max_charge_time
+            
+            # Always fire from the player
+            bus.dispatch("spawn_bullet", bullet_position, charge_level)
+            bus.dispatch("play_rumble", 0.1 + charge_level * 0.2, 0.05)
             bus.dispatch("play_laser", None)
 
             # If module is detached, fire a bullet from the module as well
-            if self.module and not self.module.attached:
+            if self.module and not self.module.attached and charge_level > 0.5:
                 module_bullet_position = Vector2(self.module.node.position.x, self.module.node.position.y)
                 module_bullet_position.x += 14
                 module_bullet_position.y += 2
-                bus.dispatch("spawn_bullet", module_bullet_position)
-                bus.dispatch("play_rumble", 0.1, 0.05)
-                bus.dispatch("play_laser", None)
+                bus.dispatch("spawn_bullet", module_bullet_position, 0)
+
+            # Hide charge node
+            if self.charge_node:
+                self.charge_node.opacity = 0
 
         # Attach/detach module with B button
         if self.module:
@@ -183,3 +244,6 @@ class Player(Actor):
         self.is_exploding = True
         self.explosion_timer = self.explosion_duration
         self.node.opacity = 0  # Hide player during explosion
+        if self.charge_node:
+            self.charge_node.opacity = 0  # Hide charge animation during explosion
+        bus.dispatch("charge_level_changed", 0)  # Reset charge bar on explosion

@@ -6,8 +6,13 @@ from engine_resources import TextureResource
 from engine_math import Vector2
 
 class Bullet(Actor):
-    def test():
-        pass
+    def __init__(self, texture: TextureResource, data: dict, position: Vector2 = None, speed: int = 1, charge_level: float = 0):
+        super().__init__(texture, data, position, speed)
+        self.charge_level = charge_level
+        # Adjust speed based on charge level (faster for charged shots)
+        self.speed = speed * (1 + charge_level)
+        # Adjust size based on charge level (bigger for charged shots)
+        self.node.scale = Vector2(1 + charge_level * 0.5, 1 + charge_level * 0.5)
 
 class BulletManager:
     def __init__(self, bullet_texture: TextureResource, bullet_data: dict, pool_size: int = 10):
@@ -44,6 +49,7 @@ class BulletManager:
         
     def _on_spawn_bullet(self, evt):
         position = evt[0]
+        charge_level = evt[1] if len(evt) > 1 else 0
         
         if not self._pool:
             return
@@ -52,10 +58,13 @@ class BulletManager:
         self._active.append(bullet)
        
         bullet.node.opacity = 1
-        bullet.speed = 6
+        bullet.charge_level = charge_level
+        bullet.speed = 6  # Base speed * charge multiplier
         bullet.input = Vector2(1, 0)
         bulletNode = bullet.node
         bulletNode.opacity = 1
         bulletNode.position.x = position.x
         bulletNode.position.y = position.y
+        # Scale the bullet based on charge level
+        bulletNode.scale = Vector2(1 + charge_level * 0.5, 1 + charge_level * 0.5)
         
